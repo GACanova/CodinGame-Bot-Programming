@@ -13,6 +13,7 @@ const int HEIGHT = 15;
 const int N = WIDTH * HEIGHT;
 const int MAX_DEPTH_CHECK_POSITION = 5;
 const string allDirections = "ENSW";
+vector<bool> defaultMap;
 
 struct Coordinate 
 {
@@ -42,14 +43,20 @@ inline bool operator<(const Coordinate& p1, const Coordinate& p2)
 
 inline Coordinate operator + (const Coordinate& p1, const Coordinate& p2)
 {
-    Coordinate newCoordinate = {p1.x + p2.x, p2.y + p2.y};
+    Coordinate newCoordinate = {p1.x + p2.x, p1.y + p2.y};
     return newCoordinate;
 }
 
 inline Coordinate operator - (const Coordinate& p1, const Coordinate& p2)
 {
-    Coordinate newCoordinate = {p1.x - p2.x, p2.y - p2.y};
+    Coordinate newCoordinate = {p1.x - p2.x, p1.y - p2.y};
     return newCoordinate;
+}
+
+inline ostream &operator << (ostream& os, const Coordinate& p1)
+{
+    os << p1.x << " " << p1.y;
+    return os;
 }
 
 typedef vector<vector<bool>> ListOfMaps;
@@ -75,86 +82,49 @@ class Orders
 {
     public:
         string order;
-        Coordinate torpedo;
-        Coordinate mine;
-        int sector{-1};
-        int movment{-1};
-        int attack{-1};
+        Coordinate r;
+        int sector;
         char direction;
 
-        Orders(const string orderLine)
+        Orders() : order(""), r({-1, -1}), sector(-1), direction('X'){}
+
+        void updateData(string orderString)
         {
-            if(orderLine != "")
-                decomposeOrders(orderLine);
-        }
+            if(orderString != "")
+            {
+                vector<string> orderComponents = split(orderString, ' ');
 
-        void decomposeOrders(const string orders)
-        {
-            vector<string> ordersList = split(orders, '|');
-            vector<string> movmentOrder = split(ordersList[0], ' ');
-            string movmentString = movmentOrder[0];
-            
-            if(movmentString == "MOVE")
-            {
-                direction = movmentOrder[1][0];
-                movment = 0;
-                sector = -1;
-            }
-            else if(movmentString == "SILENCE")
-            {   
-                direction = 'X';
-                movment = 1;
-                sector = -1;
-            }
-            else if(movmentString == "SURFACE")
-            {
-                direction = 'X';
-                sector = stoi(movmentOrder[1]);
-                movment = 2;
-            }
-            else if(movmentString == "SONAR")
-            {
-                direction = 'X';
-                sector = stoi(movmentOrder[1]);
-                movment = 3;
-            }
+                if(orderComponents[0] != "MSG")
+                {
+                    order = orderComponents[0];
 
-            vector<string> attackOrder;
-            string attackString = "";
+                    if(order == "MOVE" || order == "MINE")
+                        direction = orderComponents[1][0];
 
-            if(ordersList.size() > 1)
-            {
-                attackOrder = split(ordersList[1], ' ');
-                attackString = attackOrder[0];
+                    if(order == "TORPEDO" || order == "TRIGGER")
+                        r = {stoi(orderComponents[1]), stoi(orderComponents[2])};
 
-            }
+                    if(order == "SURFACE" || order == "SONAR")
+                        sector = stoi(orderComponents[1]);
 
-            if(attackString == "TORPEDO")
-            {
-                attack = 0;
-                torpedo = {stoi(attackOrder[1]), stoi(attackOrder[2])};
+                }
             }
-            else if(attackString == "TRIGGER")
-            {
-                attack = 1;
-                mine = {stoi(attackOrder[1]), stoi(attackOrder[2])};
-            }
-            else
-            {
-                attack = -1;
-                torpedo.x = -1;
-                torpedo.y = -1;
-                mine.x = -1;
-                mine.y = -1;
-            }
-        }
-
-        void update(string orderLine)
-        {
-            if(orderLine != "" && orderLine != "NA")
-                decomposeOrders(orderLine);
         }
 };
+
+vector<Orders> decomposeOrders(string stringLine)
+{
+    const auto orderList = split(stringLine, '|');
+    vector<Orders> out;
+
+    for(auto &order : orderList)
+    {   
+        Orders tmp;
+        tmp.updateData(order);
+        out.push_back(tmp);
+    }
+    return out;
+}
 
 int manhattanDistance(const Coordinate r1, const Coordinate r2)
 {
@@ -190,6 +160,15 @@ bool checkPlace(const Coordinate r, const vector<bool> &map_)
     return map_[getIndex(r)];
 }
 
+bool isViableCoordinate(const Coordinate r)
+{
+    if(isOutOfBounds(r))
+        return false;
+    if(checkPlace(r, defaultMap))
+        return false;
+    return true;
+}
+
 void changeMapState(vector<bool> &map_, const Coordinate r, const bool state)
 {
     map_[getIndex(r)] = state;
@@ -214,8 +193,12 @@ vector<Coordinate> getSectCoordinates(const int sector)
 
     for(int y = 0; y < 5; y++)
         for(int x = 0; x < 5; x++)
-            out.push_back({x + 5 * ((sector - 1) % 3), y + 5 * ((sector - 1)/3)});    
+        {
+            const Coordinate r = {x + 5 * ((sector - 1) % 3), y + 5 * ((sector - 1)/3)};
 
+            if(isViableCoordinate(r))
+                out.push_back(r);    
+        }
     return out;
 }
 
@@ -234,13 +217,13 @@ vector<Coordinate> getNearByCoordinates(const vector<bool> &map_, const Coordina
                 int distance = manhattanDistance(r, newPoint);
                 
                 if(distance <= maxDistance && distance >= minDistance)
-                {
                     out.push_back(newPoint);
-                }
+                
             }
         }
     return out;
 }
+
 
 /* This function checks if the sub will run into a dead end */
 bool isThereWayOut(Coordinate r, const int depth, const vector<bool> &map_, bool &flag)
@@ -270,6 +253,29 @@ bool isThereWayOut(Coordinate r, const int depth, const vector<bool> &map_, bool
     return flag;
 }
 
+bool checkTrajectory(const Coordinate r, const Coordinate target, const int steps, bool &flag)
+{
+    if(r == target)
+        return true;
+    else if(steps == 0 || !isViableCoordinate(r))
+        return false;
+
+    Coordinate newCoordinate;
+
+    for(int i = -1; i < 2; i++)
+    {
+        newCoordinate = {r.x + i, r.y};
+        flag |= checkTrajectory(newCoordinate, target, steps - 1, flag);
+
+        newCoordinate = {r.x, r.y + i};
+        flag |= checkTrajectory(newCoordinate, target, steps - 1, flag);
+    }
+    
+
+
+    return flag;
+}
+
 bool isDirectionPossible(const Coordinate r, const char direction, const vector<bool> &map_)
 {
     Coordinate newCoordinate = moveToDirection(r, direction);
@@ -282,6 +288,17 @@ bool isDirectionPossible(const Coordinate r, const char direction, const vector<
         return false;
 
     return true;
+}
+
+
+vector<Coordinate> getAllMapKeys(map<Coordinate, ListOfMaps> &possibilities)
+{
+    vector<Coordinate> out;
+
+    for(map<Coordinate, ListOfMaps>::iterator iter = possibilities.begin(); iter != possibilities.end(); ++iter)
+        out.push_back(iter->first);
+
+    return out;
 }
 
 map<Coordinate, ListOfMaps> allStartingPossibilities(const vector<bool> &map_)
@@ -300,19 +317,42 @@ map<Coordinate, ListOfMaps> allStartingPossibilities(const vector<bool> &map_)
     return out;     
 }
 
-map<Coordinate, ListOfMaps> resetAllMaps(map<Coordinate, ListOfMaps> &possibilities, const vector<bool> &map_)
+map<Coordinate, ListOfMaps> resetAllMaps(map<Coordinate, ListOfMaps> &possibilities)
 {
     map<Coordinate, ListOfMaps> out;
 
     for(std::map<Coordinate, ListOfMaps>::iterator iter = possibilities.begin(); iter != possibilities.end(); ++iter)
     {
         Coordinate r =  iter->first;
-        out[r].push_back(map_);
+        out[r].push_back(defaultMap);
     }
     return out;
 }
 
-map<Coordinate, ListOfMaps> findMatchingPattern(map<Coordinate, ListOfMaps> &possibilities, const vector<bool> &defaultMap, const char direction)
+map<Coordinate, ListOfMaps> refinePossibilitiesByCoordinates(map<Coordinate, ListOfMaps> &possibilities, const vector<Coordinate> &coordinates)
+{
+    map<Coordinate, ListOfMaps> out;
+
+    for(auto &xy : coordinates)
+    {
+        if(possibilities.count(xy))
+        {
+            auto tmp = possibilities.extract(xy);
+            tmp.key() = xy;
+            out.insert(std::move(tmp));
+        }
+    }
+    return out;
+}
+
+void removeCoordinatesFromPossibilities(map<Coordinate, ListOfMaps> &possibilities, const vector<Coordinate> &coordinates)
+{
+    for(auto &xy : coordinates)
+        if(possibilities.count(xy))
+            possibilities.erase(possibilities.find(xy));
+}
+
+map<Coordinate, ListOfMaps> findMatchingPattern(map<Coordinate, ListOfMaps> &possibilities, const char direction)
 {
     map<Coordinate, ListOfMaps> out;
 
@@ -322,7 +362,7 @@ map<Coordinate, ListOfMaps> findMatchingPattern(map<Coordinate, ListOfMaps> &pos
         const ListOfMaps list = iter->second;
         const Coordinate path = moveToDirection(r, direction);
 
-        if(!isOutOfBounds(path) && !checkPlace(path, defaultMap))
+        if(isViableCoordinate(r))
         {
             for(auto &map_ : list)
             {
@@ -338,14 +378,15 @@ map<Coordinate, ListOfMaps> findMatchingPattern(map<Coordinate, ListOfMaps> &pos
     return out;
 }
 
-map<Coordinate, ListOfMaps> addNewPossibilities(map<Coordinate, ListOfMaps> &possibilities, const vector<bool> &defaultMap, const char direction)
+map<Coordinate, ListOfMaps> addNewPossibilities(map<Coordinate, ListOfMaps> &possibilities, const char direction)
 {
-    map<Coordinate, ListOfMaps> out;
+    map<Coordinate, ListOfMaps> out = possibilities;
 
     for(std::map<Coordinate, ListOfMaps>::iterator iter = possibilities.begin(); iter != possibilities.end(); ++iter)
     {
         const Coordinate r = iter->first;
         const ListOfMaps list = iter->second;
+        vector<bool> flag(list.size(), true);
 
         for(auto &d : allDirections)
         {
@@ -355,17 +396,27 @@ map<Coordinate, ListOfMaps> addNewPossibilities(map<Coordinate, ListOfMaps> &pos
             {
                 path = moveToDirection(path, d);
 
-                if(!isOutOfBounds(path) && !checkPlace(path, defaultMap))
+                if(isViableCoordinate(path))
                 {
+                    int i = 0;
                     for(auto &map_ : list)
                     {
-                        if(!checkPlace(path, map_))
+                        if(!checkPlace(path, map_) && flag[i])
                         {
                             vector<bool> newMap = map_;
                             changeMapState(newMap, path, true);
                             out[path].push_back(newMap);
                         }
+                        else
+                        {
+                            flag[i] = false;
+                        }
+                        i++;
                     }
+                }
+                else
+                {
+                    break;
                 }
             }
         }
@@ -373,120 +424,111 @@ map<Coordinate, ListOfMaps> addNewPossibilities(map<Coordinate, ListOfMaps> &pos
     return out;
 }
 
-map<Coordinate, ListOfMaps> refinePossibilitiesBySector(map<Coordinate, ListOfMaps> &possibilities, const int sector)
+map<Coordinate, ListOfMaps> refinePossibilitiesByTorpedoFired(map<Coordinate, ListOfMaps> &possibilities, const vector<bool> &defaultMap, const Coordinate r)
 {
-    map<Coordinate, ListOfMaps> out;
-    const auto sectorCoordinates = getSectCoordinates(sector);
-
-    for(auto &xy : sectorCoordinates)
-    {
-        if (possibilities.count(xy))
-        {
-            auto tmp = possibilities.extract(xy);
-            tmp.key() = xy;
-            out.insert(std::move(tmp));
-        }
-    }
-    return out;
-}
-
-map<Coordinate, ListOfMaps> refinePossibilitiesByDistance(map<Coordinate, ListOfMaps> &possibilities, const vector<bool> &defaultMap, const Coordinate r)
-{
-    map<Coordinate, ListOfMaps> out;
     const auto nearByCoordinates = getNearByCoordinates(defaultMap, r, 0, 4);
+    vector<Coordinate> coordinates;
 
     for(auto &xy : nearByCoordinates)
     {
-        if (possibilities.count(xy))
-        {
-            auto tmp = possibilities.extract(xy);
-            tmp.key() = xy;
-            out.insert(std::move(tmp));
-        }
+        bool flag = false;
+
+        if(checkTrajectory(xy, r, 4, flag))
+            coordinates.push_back(xy);
     }
-    return out;
+
+    return refinePossibilitiesByCoordinates(possibilities, coordinates);
 }
 
 vector<Coordinate> getFirstNeighbors(const Coordinate r, bool withDiagonals)
 {
-    vector<Coordinate> out;
+    vector<Coordinate> neighbors, out;
     Coordinate neigh;
 
     for(int i = -1; i < 2; i += 2)
     {
         neigh.x = r.x + i;
         neigh.y = r.y;
-        out.push_back(neigh);
+        neighbors.push_back(neigh);
 
         neigh.x = r.x;
         neigh.y = r.y + i;
-        out.push_back(neigh);
+        neighbors.push_back(neigh);
 
         if(withDiagonals)
         {
             neigh.x = r.x + i;
             neigh.y = r.y + i;
-            out.push_back(neigh);
+            neighbors.push_back(neigh);
 
             neigh.x = r.x + i;
             neigh.y = r.y - i;
-            out.push_back(neigh);
+            neighbors.push_back(neigh);
         }
+    }
+
+    for(auto &xy : neighbors)
+    {
+        if(isViableCoordinate(xy))
+            out.push_back(xy);
     }
     return out;
 }
 
-map<Coordinate, ListOfMaps> refinePossibilitiesByCoordinates(map<Coordinate, ListOfMaps> &possibilities, const vector<bool> &defaultMap, const vector<Coordinate> &coordinates)
+int getNumberOfPossibilities(const vector<bool> &map_, const Coordinate r)
 {
-    map<Coordinate, ListOfMaps> out;
+    int counter = 0;
 
-    for(auto &xy : coordinates)
+    for(auto &d : allDirections)
     {
-        if(!isOutOfBounds(xy) && !checkPlace(xy, defaultMap))
+        Coordinate path = r;
+
+        for(int i = 0; i < 4; i++)
         {
-            if (possibilities.count(xy))
+            path = moveToDirection(path, d);
+
+            if(isViableCoordinate(path) && !checkPlace(path, map_))
             {
-                auto tmp = possibilities.extract(xy);
-                tmp.key() = xy;
-                out.insert(std::move(tmp));
+                counter++;
+            }
+            else
+            {
+                break;
             }
         }
     }
-    return out;
+    return counter;
+}
+
+int checkForEqualMaps(const ListOfMaps &maps)
+{
+    int counter = 0;
+
+    for(int j = 0; j < maps.size() - 1; j++)
+        for(int i = j + 1; i < maps.size(); i++)
+            counter += (maps[i] == maps[j]);
+
+    return counter;
 }
 
 void calculatePossibilities(map<Coordinate, ListOfMaps> &possibilities, const vector<bool> &defaultMap, const Orders &orders)
 {
-        switch(orders.movment)
+        if(orders.order == "MOVE")
         {
-            //MOVE
-            case 0:
-                possibilities = findMatchingPattern(possibilities, defaultMap, orders.direction);
-            break;
-
-            //SILENCE
-            case 1:
-                possibilities = addNewPossibilities(possibilities, defaultMap, orders.direction);
-            break;
-
-            //SURFACE
-            case 2:
-                possibilities = resetAllMaps(possibilities, defaultMap);
-                possibilities = refinePossibilitiesBySector(possibilities, orders.sector);
-            break;
-
-            //SONAR
-            case 3:
-                //possibilities = refinePossibilitiesBySector(possibilities, orders.sector);
-            break;
+            possibilities = findMatchingPattern(possibilities, orders.direction);
         }
-
-        switch(orders.attack)
-        {   
-            //TORPEDO
-            case 0:
-                possibilities = refinePossibilitiesByDistance(possibilities, defaultMap, orders.torpedo);
-            break;
+        else if(orders.order == "SILENCE")
+        {
+            possibilities = addNewPossibilities(possibilities, orders.direction);
+        }
+        else if(orders.order == "TORPEDO")
+        {
+            possibilities = refinePossibilitiesByTorpedoFired(possibilities, defaultMap, orders.r);
+        }
+        else if(orders.order == "SURFACE")
+        {
+            possibilities = resetAllMaps(possibilities);
+            possibilities = refinePossibilitiesByCoordinates(possibilities, getSectCoordinates(orders.sector));
         }
 }
 
@@ -511,9 +553,37 @@ vector<bool> buildInitialMap(const vector<string> lines)
     return row;
 }
 
-vector<Coordinate> viableTorpedoCoordinates(const vector<bool> &defaultMap, const Coordinate r)
+
+Coordinate maxCoordinatesDensity(const vector<Coordinate> &coordinates)
 {
-    vector<Coordinate> firePossibilities;
+    int max = -1;
+    Coordinate max_coordinate;
+
+    for(auto &xy : coordinates)
+    {
+        const auto neighbors = getFirstNeighbors(xy, true);
+        int counter = 0;
+
+        for(auto &n : neighbors)
+        {
+            auto it = std::find(coordinates.begin(), coordinates.end(), n);
+
+            if(it != coordinates.end())
+                counter++;
+        }
+
+        if(counter >= max)
+        {
+            max = counter;
+            max_coordinate = xy;        
+        }
+        return max_coordinate;
+    }
+}
+
+vector<Coordinate> viableTorpedoCoordinates(const Coordinate r)
+{
+    vector<Coordinate> firePossibilities, out;
     const auto coordinatesInRange = getNearByCoordinates(defaultMap, r, 1, 4);
     const auto firstNeighbors = getFirstNeighbors(r, true);
 
@@ -524,12 +594,20 @@ vector<Coordinate> viableTorpedoCoordinates(const vector<bool> &defaultMap, cons
         if(it == firstNeighbors.end())
             firePossibilities.push_back(x);
     }
-    return firePossibilities;
+
+    for(auto &xy : firePossibilities)
+    {
+        bool flag = false;
+        if(checkTrajectory(r, xy, 4, flag))
+            out.push_back(xy);
+    }
+
+    return out;
 }
 
-Coordinate torpedoAttack(map<Coordinate, ListOfMaps> &possibilities, const vector<bool> &defaultMap, const Coordinate r, const int maxPossibilities)
+Coordinate torpedoAttack(map<Coordinate, ListOfMaps> &possibilities, const Coordinate r, const int maxPossibilities)
 {
-    auto coordinates = viableTorpedoCoordinates(defaultMap, r);
+    auto coordinates = viableTorpedoCoordinates(r);
     vector<Coordinate> out;
 
     for(auto &xy : coordinates)
@@ -541,10 +619,16 @@ Coordinate torpedoAttack(map<Coordinate, ListOfMaps> &possibilities, const vecto
     const int nPossibilities = out.size();
     Coordinate fireCoordinate = {-1, -1};
 
-    if(nPossibilities && nPossibilities <= maxPossibilities)
+    if(nPossibilities > 2)
     {
-        fireCoordinate = out[rand() % nPossibilities];
-        return fireCoordinate;
+        fireCoordinate = maxCoordinatesDensity(out);
+    }
+    else
+    {
+        if(nPossibilities && nPossibilities <= maxPossibilities)
+        {
+            fireCoordinate = out[rand() % nPossibilities];
+        }
     }
     return fireCoordinate;
 }
@@ -585,16 +669,15 @@ bool isThereMineAround(const vector<Coordinate> mineCoordinates, const Coordinat
     return false;
 }
 
-bool canPlaceMine(const vector<bool> &map_, const vector<Coordinate> &mineCoordinates, const Coordinate r, const char direction, Coordinate &mineCoordinate, char &mineDirection)
+bool canPlaceMine(const vector<Coordinate> &mineCoordinates, const Coordinate r, const char direction, Coordinate &mineCoordinate, char &mineDirection)
 {
     string directions = "EWNS";
 
     for(auto &d : directions)
     {
         Coordinate newCoordinate = moveToDirection(r, d);
-        Coordinate mine;
 
-        if(!isThereMineAround(mineCoordinates, newCoordinate) && !checkPlace(newCoordinate, map_))
+        if(!isThereMineAround(mineCoordinates, newCoordinate) && isViableCoordinate(newCoordinate))
         {
             mineCoordinate = newCoordinate;
             mineDirection = d;
@@ -604,7 +687,7 @@ bool canPlaceMine(const vector<bool> &map_, const vector<Coordinate> &mineCoordi
     return false;
 }
 
-bool canTriggerMine(map<Coordinate, ListOfMaps> possibilities, const vector<Coordinate> &mineCoordinates, Coordinate &mineCoordinate, int maxPossibilities)
+bool canTriggerMine(map<Coordinate, ListOfMaps> possibilities, const vector<Coordinate> &mineCoordinates, Coordinate &mineCoordinate, Coordinate myCoordinate, int maxPossibilities)
 {
     vector<Coordinate> allPossibleMines;
     vector<Coordinate> inRangePossibilities;
@@ -618,7 +701,10 @@ bool canTriggerMine(map<Coordinate, ListOfMaps> possibilities, const vector<Coor
         {
             if(possibilities.count(xy))
             {
-                allPossibleMines.push_back(mine);
+                auto it = std::find(inRangePossibilities.begin(), inRangePossibilities.end(), myCoordinate);
+
+                if(it == inRangePossibilities.end())
+                    allPossibleMines.push_back(mine);
             }
 
         }
@@ -663,31 +749,119 @@ Coordinate initialPosition(const vector<bool> &map_, string mode)
             }
         }
     }
+    else if(mode == "RANDOM")
+    {
+        bool flag = false;
+
+        do
+        {
+            r.x = rand() % WIDTH;
+            r.y = rand() % HEIGHT;
+            flag = false;
+        
+        }
+        while(checkPlace(r, map_) || !isThereWayOut(r, MAX_DEPTH_CHECK_POSITION, map_, flag));
+    }
+
     return r;
 }
 
-bool navigationSystem(const vector<bool> &map_, char &direction, const Coordinate &r, int movmentMode)
+bool navigationSystem(const vector<bool> &map_, char &direction, const Coordinate &r, string movmentMode)
 {
-    bool isTherePossibleDirection = false;
-    
-    if(!movmentMode)
+    if(movmentMode == "FILL")
+    {
+        std::vector<std::pair<int , char>> nn;
+
+        for(auto &d : allDirections)
+        {
+            Coordinate newCoordinate = moveToDirection(r, d);
+            int counter = 0;
+
+            if(!checkPlace(newCoordinate, map_))
+            {
+                for(auto &d2 : allDirections)
+                {
+                    Coordinate neigh = moveToDirection(newCoordinate, d2);
+                    counter += (checkPlace(neigh, map_));
+                }
+
+                pair<int , char> p = {counter, d};
+                nn.push_back(p);
+            }
+            
+        }
+
+        if(!nn.size())
+            return false;
+
+        std::sort(nn.begin(), nn.end(), std::greater<pair<int, char>>());
+
+        for(auto &x : nn)
+            cerr << x.second << " " << x.first << endl;
+
+        for(auto &x : nn)
+        {
+            Coordinate newCoordinate = moveToDirection(r, x.second);
+
+            bool flag = false;
+            if(!checkPlace(newCoordinate, map_) && isThereWayOut(newCoordinate, MAX_DEPTH_CHECK_POSITION, map_, flag))
+            {
+                direction = x.second;
+                return true;
+            }
+        }
+
+    }
+
+    if(movmentMode == "PATTERN")
     {
         for(auto &d : allDirections)
         {
             if(isDirectionPossible(r, d, map_))
             {
                 direction = d;
-                isTherePossibleDirection = true;
-                break;
+                return true;
             }
         }
     }
-    return isTherePossibleDirection;
+    
+    return false;
 } 
+
+void filterPossibilitiesByHit(map<Coordinate, ListOfMaps> possibilities, const vector<bool> &defaultMap, const int oppLifeDifference, const Coordinate r, char direction)
+{
+    if(oppLifeDifference == 2)
+    {
+        vector<Coordinate> v;
+        v.push_back(moveToDirection(r, direction));
+        possibilities = refinePossibilitiesByCoordinates(possibilities, v);
+    }
+    else if(oppLifeDifference == 1)
+    {
+        const auto firstNeighborsCoordinates = getFirstNeighbors(r, true);
+        vector<Coordinate> movedFirstNeighbors;
+
+        for(auto &xy : firstNeighborsCoordinates)
+        {
+            movedFirstNeighbors.push_back(moveToDirection(xy, direction));
+
+        }
+        
+        possibilities = refinePossibilitiesByCoordinates(possibilities, movedFirstNeighbors);
+    }
+
+    if(!oppLifeDifference)
+    {
+        auto firstNeighborsCoordinates = getFirstNeighbors(r, true);
+        firstNeighborsCoordinates.push_back(r);
+        removeCoordinatesFromPossibilities(possibilities, firstNeighborsCoordinates);
+    }
+}
 
 int main()
 {
     srand(42);
+    //srand(time(NULL));
     int width_;
     int height_;
     int myId;
@@ -703,22 +877,27 @@ int main()
 
     bool opponentPositionExists = false;
     bool escapeMode = false;
+    bool canFilterByHit = true;
 
-    const vector<bool> defaultMap = buildInitialMap(lines);
+    defaultMap = buildInitialMap(lines);
     vector<bool> myMap = defaultMap;    
     char direction;
     string myPrevOrder;
+    string myPrevOrderLine;
     vector<Coordinate> mineCoordinates;
 
-    Orders myPrevOrders("");
+    //Orders myPrevOrders("");
     map<Coordinate, ListOfMaps> myPossibilities = allStartingPossibilities(defaultMap);
     int myPrevLife = 6;
 
-    Orders opponentOrders("");
-    map<Coordinate, ListOfMaps> opponenetPossibilities = allStartingPossibilities(defaultMap);
+    //Orders opponentOrders("");
+    map<Coordinate, ListOfMaps> oppPossibilities = allStartingPossibilities(defaultMap);
     int oppPrevLife = 6;
+    char oppDirection = 'X';
 
-    auto startingPosition = initialPosition(defaultMap, "CENTER");
+    auto startingPosition = initialPosition(defaultMap, "RANDOM"); //"CENTER"
+
+    int step_counter = 0;
 
     cout << startingPosition.x << " " << startingPosition.y << endl;
 
@@ -739,60 +918,145 @@ int main()
         string opponentOrdersLine;
         getline(cin, opponentOrdersLine);
 
+        cerr << "ATÉ 1" << endl;
+
         const Coordinate r = {x, y};
         changeMapState(myMap, r, true);
 
-        opponentOrders.update(opponentOrdersLine);
-        calculatePossibilities(opponenetPossibilities, defaultMap, opponentOrders);
+        auto oppOrders = decomposeOrders(opponentOrdersLine);
 
-        //TORPEDO HIT
-        if(myPrevOrders.attack == 0 && opponentOrders.movment != 2 && opponentOrders.direction != 'X')
+        cerr << "ATÉ 1.5" << endl;
+
+
+        auto myPrevOrders = decomposeOrders(myPrevOrderLine);
+
+        cerr << "ATÉ 2" << endl;
+
+        for(auto &oppOrder : oppOrders)
         {
-            int oppLifeDifference = oppPrevLife - oppLife;
+            cerr << oppOrder.order << " direction = " << oppOrder.direction << " " << oppOrder.r <<  endl;
+            calculatePossibilities(oppPossibilities, defaultMap, oppOrder);
+            canFilterByHit &= ((oppOrder.order != "SILENCE") && (oppOrder.order != "SURFACE"));
+            
+            if(oppOrder.order == "MOVE")
+                oppDirection = oppOrder.direction;
+        }
 
-            if(oppLifeDifference == 2)
-            {
-                vector<Coordinate> v;
-                v.push_back(moveToDirection(myPrevOrders.torpedo, opponentOrders.direction));
-                opponenetPossibilities = refinePossibilitiesByCoordinates(opponenetPossibilities, defaultMap, v);
-            }
-            else if(oppLifeDifference == 1)
-            {
-                const auto firstNeighborsCoordinates = getFirstNeighbors(myPrevOrders.torpedo, true);
-                vector<Coordinate> movedFirstNeighbors;
+        cerr << "ATÉ 9" << endl;
 
-                for(auto &xy : firstNeighborsCoordinates)
+        if(canFilterByHit)
+        {
+            for(auto &myOrder : myPrevOrders)
+            {
+
+                if(myOrder.order == "TORPEDO" || myOrder.order == "TRIGGER")
                 {
-                    movedFirstNeighbors.push_back(moveToDirection(xy, opponentOrders.direction));
+                    int oppLifeDifference = oppPrevLife - oppLife;
+
+                    filterPossibilitiesByHit(oppPossibilities, defaultMap, oppLifeDifference, myOrder.r, direction);
                 }
-                
-                opponenetPossibilities = refinePossibilitiesByCoordinates(opponenetPossibilities, defaultMap, movedFirstNeighbors);
             }
         }
 
-        calculatePossibilities(myPossibilities, defaultMap, myPrevOrders);
+        for(auto &myOrder : myPrevOrders)
+        {                
+            calculatePossibilities(myPossibilities, defaultMap, myOrder);
+
+        }
+        cerr << "ATÉ 10" << endl;
+        
+        canFilterByHit = true;
+       
+        bool activateSonar = false;
+        int sectorSonar;
+
+        if(!sonarCooldown && oppPossibilities.size() > 5)
+        {
+            activateSonar = true;
+            auto coordinates = getAllMapKeys(oppPossibilities);
+            sectorSonar = getSectorIndex(maxCoordinatesDensity(coordinates));
+        }
+
+        if(sonarResult != "NA")
+        {
+            auto coordinates = getSectCoordinates(sectorSonar);
+            vector<Coordinate> movedCoordinates;
+
+            for(auto &xy : coordinates)
+                movedCoordinates.push_back(moveToDirection(xy, oppDirection));
+
+            if(sonarResult == "Y")
+                oppPossibilities = refinePossibilitiesByCoordinates(oppPossibilities, movedCoordinates);
+            else if(sonarResult == "N")
+                removeCoordinatesFromPossibilities(oppPossibilities, movedCoordinates);
+        }
+
+        int oppTotalMaps = 0;
+        for(std::map<Coordinate, ListOfMaps>::iterator iter = oppPossibilities.begin(); iter != oppPossibilities.end(); ++iter)
+        {
+            Coordinate r =  iter->first;
+            ListOfMaps list = iter->second;
+            oppTotalMaps += list.size();
+
+            if(list.size() > 100)
+                cerr << "EQUAL MAPS-------------> " << checkForEqualMaps(list) << endl;
+
+
+            cerr << "("  << r.x << "," << r.y << ")  maps= " << list.size() << endl; 
+        }
+
+        int myTotalMaps = 0;
+        for(std::map<Coordinate, ListOfMaps>::iterator iter = myPossibilities.begin(); iter != myPossibilities.end(); ++iter)
+        {
+            Coordinate r =  iter->first;
+            ListOfMaps list = iter->second;
+            myTotalMaps += list.size();
+        }
+
+        cerr << "oppTotalMaps=" << oppTotalMaps << endl;
+        cerr << "myTotalMaps=" << myTotalMaps << endl;
+
+
+
+        if(oppTotalMaps > 1000000)
+        {
+            oppPossibilities = resetAllMaps(oppPossibilities);
+        }
+
+        if(myTotalMaps > 1024)
+            myPossibilities = resetAllMaps(myPossibilities);
+
 
 /*********************** Direction **********************************************************************/
         char direction;
-        bool isTherePossibleDirection = navigationSystem(myMap, direction, r, 0);
+        bool isTherePossibleDirection = navigationSystem(myMap, direction, r, "FILL");
         const Coordinate myNextCoordinate = moveToDirection(r, direction);
 
 /****************** Torpedo Attack ***************************************************************************/
     Coordinate torpedoCoordinate = {-1, -1};
 
-    if(opponenetPossibilities.size() == 1)
+    if(!torpedoCooldown && step_counter > 20)
     {
-        torpedoCoordinate = torpedoAttack(opponenetPossibilities, defaultMap, myNextCoordinate, 1);
+        if(oppPossibilities.size() <= 10)
+        {
+            torpedoCoordinate = torpedoAttack(oppPossibilities, myNextCoordinate, 1000);
+        }
     }
     const bool fireTorpedo = (torpedoCoordinate.x != -1 && torpedoCoordinate.y != -1 && !torpedoCooldown);
 
 /****************** Mine Attack ***************************************************************************/
-    //if(!mineCooldown)
     char mineDirection;
+    bool triggerMine = false;
+    bool placeMine = false;
     Coordinate mineCoordinate;
-    const bool placeMine = canPlaceMine(defaultMap, mineCoordinates, myNextCoordinate, direction, mineCoordinate, mineDirection);
-    const bool triggerMine = canTriggerMine(opponenetPossibilities, mineCoordinates, mineCoordinate, 225);
 
+    if(!mineCooldown)
+    {
+        placeMine = canPlaceMine(mineCoordinates, myNextCoordinate, direction, mineCoordinate, mineDirection);
+
+        if(oppPossibilities.size() <= 2)
+            triggerMine = canTriggerMine(oppPossibilities, mineCoordinates, mineCoordinate, r, 225);
+    }
 
 /****************** CharginMode ***************************************************************************/
 
@@ -802,15 +1066,24 @@ int main()
             chargingMode = "TORPEDO";
         else if(silenceCooldown)
             chargingMode = "SILENCE";
-        else
+        else if(mineCooldown)
             chargingMode = "MINE";
+        else
+            chargingMode = "SONAR";
 
 /****************** My Order ******************************************************************************/
 
         int myNumberOfPossibilities = myPossibilities.size();
 
-        if((myNumberOfPossibilities && myNumberOfPossibilities <= 3) || (!opponentOrders.attack && myPrevLife != myLife && myPrevOrders.movment != 2))
-            escapeMode = true;
+        cerr << "MY NUMBER OF POSS " << myNumberOfPossibilities << endl;
+
+        cerr << "GET NUMBER OF POSS " << getNumberOfPossibilities(myMap, r) << endl;
+
+
+        if(silenceCooldown && myNumberOfPossibilities < 20)
+            if(myNumberOfPossibilities < 5 || getNumberOfPossibilities(myMap, r) >= 10)
+                escapeMode = true;
+
 
         stringstream myOrder;
 
@@ -818,12 +1091,12 @@ int main()
         {
             if(escapeMode && !silenceCooldown)
             {
-                myOrder << "SILENCE " << direction << " " << to_string(moveInSilence(myMap, r, direction, rand() % 4));
+                myOrder << "SILENCE " << direction << " " << to_string(moveInSilence(myMap, r, direction, 0)); //rand() % 4)
                 escapeMode = false;
             }
             else
             {
-                myOrder << "MOVE " << direction << " " << chargingMode;
+                myOrder << "|MOVE " << direction << " " << chargingMode;
 
                 if(fireTorpedo)
                 {
@@ -840,24 +1113,33 @@ int main()
                     myOrder << "|MINE " << mineDirection;
                     mineCoordinates.push_back(mineCoordinate);
                 }
+                
+                if(activateSonar)
+                {
+                    myOrder << "|SONAR " << sectorSonar;
+                }
             }
         }   
         else
         {
             myOrder << "SURFACE";
             myMap = resetMap(defaultMap);
+            isTherePossibleDirection = true;
         }
+
+        cerr << "END " << myOrder.str() << endl;
 
         cout << myOrder.str() << endl;
 
-        myPrevOrder = myOrder.str();
+        myPrevOrderLine = myOrder.str();
 
-        if(myPrevOrder == "SURFACE")
-            myPrevOrder += ' ' + to_string(getSectorIndex(r));
+        if(myPrevOrderLine == "SURFACE")
+            myPrevOrderLine += ' ' + to_string(getSectorIndex(r));
 
-        myPrevOrders.update(myPrevOrder);
 
         myPrevLife = myLife;
         oppPrevLife = oppLife;
+        step_counter++;
+
     }
 }
